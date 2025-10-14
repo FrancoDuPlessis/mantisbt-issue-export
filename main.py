@@ -1,156 +1,185 @@
-import os
+import logging
 import re
+from pathlib import Path
+from typing import List, Optional, Tuple
+import getpass
 import requests
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+import os
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
 
-# Define URLs for the login pages
-username_url = "http://mantis.rrs.co.za/login_password_page.php"
-password_url = "http://mantis.rrs.co.za/login.php"
+# Load environment variables
+load_dotenv()
 
-# Credentials   
-username = "Francoisdl"
-password = "gTf{<=$DT9cJ7FgS"
+# Constants
+BASE_URL = os.getenv("BASE_URL") or logger.error("BASE_URL not set in .env file") or exit(1)
+USERNAME_URL = os.getenv("USERNAME_URL") or logger.error("USERNAME_URL not set in .env file") or exit(1)
+PASSWORD_URL = os.getenv("PASSWORD_URL") or logger.error("PASSWORD_URL not set in .env file") or exit(1)
+DOWNLOADS_DIR = Path("downloads")
+ISSUE_FILE = Path("issue_list.txt")
 
-folder_path = "downloads"
-base_url = "http://mantis.rrs.co.za/"
-
-# Create the folder if it doesn't exist
-if not os.path.exists(folder_path):
-    os.makedirs(folder_path)
-
-
-def main():
-
-    # Create a session to persist cookies
-    session = requests.Session()
-
-    # Step 1: Submit username to the first page
-    username_payload = {
-        "return": "index.php",
-        "username": username
-    }
-    response_username = session.post(username_url, data=username_payload)
+class MantisScraper:
+    """A class to scrape issues and download PDF files from a MantisBT instance."""
     
-    # Check if the request was successful
-    if response_username.status_code == 200:
-        print("Username submitted successfully")
-    else:
-        print(f"Failed to submit username: {response_username.status_code}")
-        exit()
-    
-    # Step 2: Submit password to the second page
-    password_payload = {
-        "return": "login.php",
-        "username": username,
-        "password": password
-    }
-    response_password = session.post(password_url, data=password_payload)
+    def __init__(self, base_url: str, username_url: str, password_url: str, username: str, password: str):
+        self.base_url = base_url.rstrip('/')
+        self.username_url = username_url
+        self.password_url = password_url
+        self.username = username
+        self.password = password
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        })
 
-    # Check if the login was successful
-    if response_password.status_code == 200:
-        print("Password submitted successfully")
-        if "Assigned to Me (Unresolved)" in response_password.text:
-            print("Login successful!")
-        else:
-            print("Login may have failed. Check response content.")
-    else:
-        print(f"Failed to submit password: {response_password.status_code}")
+    def __enter__(self):
+        return self
 
-    # Access a protected issue page
-    protected_issue_page = "http://mantis.rrs.co.za/view.php?id=13513"
-    response_issue_page = session.get(protected_issue_page)
-    if response_issue_page.status_code == 200:
-        print("Successfully accessed protected page")
-    else:
-        print(f"Failed to access protected page: {response_issue_page.status_code}")
-    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.session.close()
+        logger.info("Session closed.")
 
-    # Scrape contents from issue page with BeautifulSoup
-    soup = BeautifulSoup(response_issue_page.text, "html.parser")
+    def get_issue_list(self, file_path: Path) -> List[str]:
+        """Read issue numbers from a file."""
+        try:
+            if not file_path.is_file():
+                raise FileNotFoundError(f"Issue list file {file_path} does not exist.")
+            with file_path.open("r") as f:
+                issues = [issue.strip() for issue in f.readlines() if issue.strip()]
+            logger.info(f"Loaded {len(issues)} issues from {file_path}")
+            return issues
+        except Exception as e:
+            logger.error(f"Failed to read issue list: {e}")
+            raise
 
-    # Get the issue number
-    issue_no = soup.title.text.split(':')[0]
-    issue_path = os.path.join(folder_path, issue_no)
-    # Create a issue directory in the downloads folder
-    if not os.path.exists(issue_path):
-        os.makedirs(issue_path)
+    def login(self) -> None:
+        """Log in to the MantisBT instance."""
+        try:
+            # Step 1: Submit username
+            username_payload = {"return": "index.php", "username": self.username}
+            response = self.session.post(self.username_url, data=username_payload, timeout=10)
+            response.raise_for_status()
+            if f"Enter password for '{self.username}'" not in response.text:
+                raise ValueError("Username submission failed.")
 
-    # Write the context of the page to a HTML file
-    with open(f"{issue_path}/{issue_no}_report.html", "wt") as file:
-        file.write(soup.prettify())
+            # Step 2: Submit password
+            password_payload = {"return": "login.php", "username": self.username, "password": self.password}
+            response = self.session.post(self.password_url, data=password_payload, timeout=10)
+            response.raise_for_status()
+            if "Assigned to Me (Unresolved)" not in response.text:
+                raise ValueError("Login unsuccessful.")
+            logger.info("Login successful.")
+        except requests.RequestException as e:
+            logger.error(f"Login failed: {e}")
+            raise
 
-    # Remove the PDf icon links from the soup as to not download the file multiple times.
-    pdf_icons = soup.find_all("i", class_="fa fa-file-pdf-o")
-    for i, i_tag in enumerate(pdf_icons):
-        parent_tag = i_tag.parent
-        parent_tag.decompose()
-    
-    pdf_links = soup.find_all("a", href=lambda x: x and "file_download.php" in x)
+    def access_issue_page(self, issue: str) -> Optional[requests.Response]:
+        """Access a protected issue page."""
+        try:
+            issue_url = f"{self.base_url}/view.php?id={issue}"
+            response = self.session.get(issue_url, timeout=10)
+            response.raise_for_status()
+            if "View Issue Details" not in response.text:
+                logger.error(f"Failed to access issue page {issue}")
+                return None
+            logger.info(f"Successfully accessed issue page {issue}")
+            return response
+        except requests.RequestException as e:
+            logger.error(f"Error accessing issue {issue}: {e}")
+            return None
 
-    if not pdf_links:
-        print("No PDF links found on the page.")
-    else:
-        print(f"Found {len(pdf_links)} potential PDF links.")
+    def scrape_page(self, response: requests.Response, issue: str) -> Tuple[BeautifulSoup, str, Path]:
+        """Scrape issue page content and save as HTML."""
+        try:
+            soup = BeautifulSoup(response.text, "html.parser")
+            issue_no = soup.title.text.split(':')[0]
+            issue_path = DOWNLOADS_DIR / issue_no
+            issue_path.mkdir(parents=True, exist_ok=True)
 
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept-Encoding': 'gzip, deflate',
-            'Accept': 'application/pdf,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Connection': 'keep-alive'
-        }
+            # Save HTML report
+            with (issue_path / f"{issue_no}_report.html").open("w", encoding="utf-8") as f:
+                f.write(soup.prettify())
+            logger.info(f"Saved HTML report for issue {issue_no}")
 
-        # Track downloaded files to avoid duplicate filenames
+            # Remove PDF icons to avoid duplicate downloads
+            for pdf_icon in soup.find_all("i", class_="fa fa-file-pdf-o"):
+                pdf_icon.parent.decompose()
+
+            return soup, issue_no, issue_path
+        except Exception as e:
+            logger.error(f"Error scraping issue {issue}: {e}")
+            raise
+
+    def download_pdf_files(self, issue_path: Path, pdf_links: List[BeautifulSoup]) -> None:
+        """Download PDF files from provided links."""
+        if not pdf_links:
+            logger.warning("No PDF links found.")
+            return
+
+        logger.info(f"Found {len(pdf_links)} PDF links.")
         downloaded_files = set()
 
         for index, link in enumerate(pdf_links, 1):
-            # Extract the href value
-            relative_url = link["href"]
-
-            # Construct the full URL
-            file_url = file_url = relative_url if relative_url.startswith('http') else os.path.join(base_url, relative_url.lstrip('/'))
-
-            # Extract filename from <a> tag text or use default
-            filename = link.text.strip() if link.text.strip() else f'downloaded_file_{index}.pdf'
-
-            # Sanitize filename: remove invalid characters and ensure .pdf extension
-            filename = re.sub(r'[^\w\.-]', '_', filename)  # Replace invalid chars with _
-            if not filename.lower().endswith('.pdf'):
-                filename += '.pdf'
-
-            # Ensure unique filename to avoid overwriting
-            base_name, ext = os.path.splitext(filename)
-            counter = 1
-            unique_filename = filename
-            while unique_filename in downloaded_files:
-                unique_filename = f"{base_name}_{counter}{ext}"
-                counter += 1
-            file_path = os.path.join(issue_path, unique_filename)
-            downloaded_files.add(unique_filename)
-
-            print(f"Attempting to download file {index}/{len(pdf_links)}: {unique_filename} from {file_url}")
-
             try:
-                # Use the authenticated session to download the file
-                file_response = session.get(file_url, headers=headers, allow_redirects=True)
-                
-                # Check if the request was successful
-                if file_response.status_code == 200:
-                    content_type = file_response.headers.get('content-type', '').lower()
-                    print(f"  Content-Type: {content_type}")
+                relative_url = link["href"]
+                file_url = relative_url if relative_url.startswith('http') else f"{self.base_url}/{relative_url.lstrip('/')}"
+                filename = re.sub(r'[^\w\.-]', '_', link.text.strip() or f"file_{index}.pdf")
+                if not filename.lower().endswith('.pdf'):
+                    filename += '.pdf'
 
-                    if 'application/pdf' in content_type:
-                        with open(file_path, 'wb') as f:
-                            f.write(file_response.content)
-                            print(f"  Saved as {file_path}")
+                # Ensure unique filename
+                base_name, ext = os.path.splitext(filename)
+                counter = 1
+                unique_filename = filename
+                while unique_filename in downloaded_files:
+                    unique_filename = f"{base_name}_{counter}{ext}"
+                    counter += 1
+                file_path = issue_path / unique_filename
+                downloaded_files.add(unique_filename)
+
+                logger.info(f"Downloading {unique_filename} from {file_url}")
+                response = self.session.get(file_url, timeout=10, allow_redirects=True)
+                response.raise_for_status()
+
+                if 'application/pdf' in response.headers.get('content-type', '').lower():
+                    with file_path.open("wb") as f:
+                        f.write(response.content)
+                    logger.info(f"Saved {unique_filename}")
                 else:
-                    print(f"Unexpected content type: {content_type}. The response may not be a PDF.")
-            except:
-                pass
+                    logger.warning(f"Unexpected content type for {file_url}")
+            except requests.RequestException as e:
+                logger.error(f"Failed to download {file_url}: {e}")
 
-    # Close the session
-    session.close()
+def main():
+    """Main function to orchestrate the scraping process."""
+    try:
+        # Prompt for credentials
+        username = input("Enter your Mantis username: ")
+        password = getpass.getpass(prompt=f"Enter password for {username}: ")
 
+        # Ensure downloads directory exists
+        DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+        with MantisScraper(BASE_URL, USERNAME_URL, PASSWORD_URL, username, password) as scraper:
+            scraper.login()
+            issues = scraper.get_issue_list(ISSUE_FILE)
+            for issue in issues:
+                response = scraper.access_issue_page(issue)
+                if response:
+                    soup, issue_no, issue_path = scraper.scrape_page(response, issue)
+                    pdf_links = soup.find_all("a", href=lambda x: x and "file_download.php" in x)
+                    scraper.download_pdf_files(issue_path, pdf_links)
+    except Exception as e:
+        logger.error(f"Script failed: {e}")
+        raise
 
 if __name__ == "__main__":
     main()
