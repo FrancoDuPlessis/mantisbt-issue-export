@@ -11,3 +11,6 @@ wheels/
 
 # Downloads folder
 /downloads
+
+# Visual Studio Code
+.vscode/
