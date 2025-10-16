@@ -1,7 +1,7 @@
 import logging
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Set
 import getpass
 import requests
 from bs4 import BeautifulSoup
@@ -26,14 +26,6 @@ PASSWORD_URL = os.getenv("PASSWORD_URL") or logger.error("PASSWORD_URL not set i
 DOWNLOADS_DIR = Path("downloads")
 ISSUE_FILE = Path("issue_list.txt")
 
-icon_class_list = [
-    "fa fa-envelope-o",
-    "fa fa-file-image-o",
-    "fa fa-file-o",
-    "fa fa-file-pdf-o",
-    "fa fa-file-text-o",
-    "fa fa-file-word-o",
-]
 
 class MantisScraper:
     """A class to scrape issues and download files from a MantisBT instance."""
@@ -118,18 +110,29 @@ class MantisScraper:
             with (issue_path / f"{issue_no}_report.html").open("w", encoding="utf-8") as f:
                 f.write(soup.prettify())
             logger.info(f"Saved HTML report for issue {issue_no}")
-
-            # Remove file icons to avoid duplicate downloads
-            for icon_class in icon_class_list:
-                for icon in soup.find_all("i", class_=f"{icon_class}"):
-                    icon.parent.decompose()
-
             return soup, issue_no, issue_path
         except Exception as e:
             logger.error(f"Error scraping issue {issue}: {e}")
             raise
+    
+    def get_unique_links(self, file_links: List[BeautifulSoup]) -> Set[BeautifulSoup]:
+        """Ensure downloadable file links are unique with no duplicates
 
-    def download_multiple_type_files(self, issue_path: Path, file_links: List[BeautifulSoup]) -> None:
+        Args:
+            file_links (List[BeautifulSoup]): A list of BeautifulSoup 4 element tags
+
+        Returns:
+            Set[BeautifulSoup]: A unique set of BeautifulSoup4 element tags
+        """
+        try:
+            links = [link for link in file_links if len(link.attrs) == 1 and link.find() is None and link.get_text().strip()]
+            unique_links = set(links)
+            return unique_links
+        except Exception as e:
+            logger.error(e)
+            raise
+
+    def download_multiple_type_files(self, issue_path: Path, file_links: Set[BeautifulSoup]) -> None:
         """Download files from provided links."""
         if not file_links:
             logger.warning("No file links found.")
@@ -149,34 +152,30 @@ class MantisScraper:
                 # This regex sanitizes the file name text:
                     # input:    My new:file/name.pdf
                     # output:   My_new_file_name.pdf
-                filename = re.sub(r'[^\w\.-]', '_', f"{file_basename.strip()}.{file_extension}" or f"file_{index}.{file_extension}")
+                filename = re.sub(r'[^\w\.-]', '_', f"{index}_{file_basename.strip()}.{file_extension}" or f"{index}_file.{file_extension}")
+                file_path = issue_path / filename
 
-                # Ensure unique filename
-                base_name, ext = os.path.splitext(filename)
-                counter = 1
-                unique_filename = filename
-                while unique_filename in downloaded_files:
-                    unique_filename = f"{base_name}_{counter}{ext}"
-                    counter += 1
-                file_path = issue_path / unique_filename
-                downloaded_files.add(unique_filename)
-
-                logger.info(f"Downloading {unique_filename} from {file_url}")
+                logger.info(f"Downloading {filename} from {file_url}")
                 response = self.session.get(file_url, timeout=10, allow_redirects=True)
                 response.raise_for_status()
 
                 with file_path.open("wb") as f:
                     f.write(response.content)
-                logger.info(f"Saved {unique_filename}")
+                logger.info(f"Saved {filename}")
             except requests.RequestException as e:
                 logger.error(f"Failed to download {file_url}: {e}")
 
 def main():
     """Main function to orchestrate the scraping process."""
     try:
-        # Prompt for credentials
-        username = input("Enter your Mantis username: ")
-        password = getpass.getpass(prompt=f"Enter password for {username}: ")
+        # === Use in dev enironment only ===
+        username = "Francoisdl"
+        password = "gTf{<=$DT9cJ7FgS"
+        # === Use in dev enironment only ===
+
+        # # Prompt for credentials
+        # username = input("Enter your Mantis username: ")
+        # password = getpass.getpass(prompt=f"Enter password for {username}: ")
 
         # Ensure downloads directory exists
         DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -189,7 +188,8 @@ def main():
                 if response:
                     soup, issue_no, issue_path = scraper.scrape_page(response, issue)
                     file_links = soup.find_all("a", href=lambda x: x and "file_download.php" in x)
-                    scraper.download_multiple_type_files(issue_path, file_links)
+                    unique_links = scraper.get_unique_links(file_links)
+                    scraper.download_multiple_type_files(issue_path, unique_links)
     except Exception as e:
         logger.error(f"Script failed: {e}")
         raise
