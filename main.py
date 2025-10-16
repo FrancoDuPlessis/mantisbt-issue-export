@@ -26,8 +26,17 @@ PASSWORD_URL = os.getenv("PASSWORD_URL") or logger.error("PASSWORD_URL not set i
 DOWNLOADS_DIR = Path("downloads")
 ISSUE_FILE = Path("issue_list.txt")
 
+icon_class_list = [
+    "fa fa-envelope-o",
+    "fa fa-file-image-o",
+    "fa fa-file-o",
+    "fa fa-file-pdf-o",
+    "fa fa-file-text-o",
+    "fa fa-file-word-o",
+]
+
 class MantisScraper:
-    """A class to scrape issues and download PDF files from a MantisBT instance."""
+    """A class to scrape issues and download files from a MantisBT instance."""
     
     def __init__(self, base_url: str, username_url: str, password_url: str, username: str, password: str):
         self.base_url = base_url.rstrip('/')
@@ -45,7 +54,7 @@ class MantisScraper:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.session.close()
-        logger.info("Session closed.")
+        logger.info("Session closed.\n")
 
     def get_issue_list(self, file_path: Path) -> List[str]:
         """Read issue numbers from a file."""
@@ -54,10 +63,10 @@ class MantisScraper:
                 raise FileNotFoundError(f"Issue list file {file_path} does not exist.")
             with file_path.open("r") as f:
                 issues = [issue.strip() for issue in f.readlines() if issue.strip()]
-            logger.info(f"Loaded {len(issues)} issues from {file_path}")
+            logger.info(f"Loaded {len(issues)} issues from {file_path}\n")
             return issues
         except Exception as e:
-            logger.error(f"Failed to read issue list: {e}")
+            logger.error(f"Failed to read issue list: {e}\n")
             raise
 
     def login(self) -> None:
@@ -76,9 +85,9 @@ class MantisScraper:
             response.raise_for_status()
             if "Assigned to Me (Unresolved)" not in response.text:
                 raise ValueError("Login unsuccessful.")
-            logger.info("Login successful.")
+            logger.info("Login successful.\n")
         except requests.RequestException as e:
-            logger.error(f"Login failed: {e}")
+            logger.error(f"Login failed: {e}\n")
             raise
 
     def access_issue_page(self, issue: str) -> Optional[requests.Response]:
@@ -90,10 +99,11 @@ class MantisScraper:
             if "View Issue Details" not in response.text:
                 logger.error(f"Failed to access issue page {issue}")
                 return None
+            print("")
             logger.info(f"Successfully accessed issue page {issue}")
             return response
         except requests.RequestException as e:
-            logger.error(f"Error accessing issue {issue}: {e}")
+            logger.error(f"Error accessing issue {issue}: {e}\n")
             return None
 
     def scrape_page(self, response: requests.Response, issue: str) -> Tuple[BeautifulSoup, str, Path]:
@@ -109,31 +119,37 @@ class MantisScraper:
                 f.write(soup.prettify())
             logger.info(f"Saved HTML report for issue {issue_no}")
 
-            # Remove PDF icons to avoid duplicate downloads
-            for pdf_icon in soup.find_all("i", class_="fa fa-file-pdf-o"):
-                pdf_icon.parent.decompose()
+            # Remove file icons to avoid duplicate downloads
+            for icon_class in icon_class_list:
+                for icon in soup.find_all("i", class_=f"{icon_class}"):
+                    icon.parent.decompose()
 
             return soup, issue_no, issue_path
         except Exception as e:
             logger.error(f"Error scraping issue {issue}: {e}")
             raise
 
-    def download_pdf_files(self, issue_path: Path, pdf_links: List[BeautifulSoup]) -> None:
-        """Download PDF files from provided links."""
-        if not pdf_links:
-            logger.warning("No PDF links found.")
+    def download_multiple_type_files(self, issue_path: Path, file_links: List[BeautifulSoup]) -> None:
+        """Download files from provided links."""
+        if not file_links:
+            logger.warning("No file links found.")
             return
 
-        logger.info(f"Found {len(pdf_links)} PDF links.")
+        logger.info(f"Found {len(file_links)} file links.")
         downloaded_files = set()
 
-        for index, link in enumerate(pdf_links, 1):
+        for index, link in enumerate(file_links, 1):
             try:
                 relative_url = link["href"]
                 file_url = relative_url if relative_url.startswith('http') else f"{self.base_url}/{relative_url.lstrip('/')}"
-                filename = re.sub(r'[^\w\.-]', '_', link.text.strip() or f"file_{index}.pdf")
-                if not filename.lower().endswith('.pdf'):
-                    filename += '.pdf'
+
+                file_basename, _file_extension = os.path.splitext(link.text)
+                file_extension = _file_extension.lstrip('.')
+                
+                # This regex sanitizes the file name text:
+                    # input:    My new:file/name.pdf
+                    # output:   My_new_file_name.pdf
+                filename = re.sub(r'[^\w\.-]', '_', f"{file_basename.strip()}.{file_extension}" or f"file_{index}.{file_extension}")
 
                 # Ensure unique filename
                 base_name, ext = os.path.splitext(filename)
@@ -149,12 +165,9 @@ class MantisScraper:
                 response = self.session.get(file_url, timeout=10, allow_redirects=True)
                 response.raise_for_status()
 
-                if 'application/pdf' in response.headers.get('content-type', '').lower():
-                    with file_path.open("wb") as f:
-                        f.write(response.content)
-                    logger.info(f"Saved {unique_filename}")
-                else:
-                    logger.warning(f"Unexpected content type for {file_url}")
+                with file_path.open("wb") as f:
+                    f.write(response.content)
+                logger.info(f"Saved {unique_filename}")
             except requests.RequestException as e:
                 logger.error(f"Failed to download {file_url}: {e}")
 
@@ -175,8 +188,8 @@ def main():
                 response = scraper.access_issue_page(issue)
                 if response:
                     soup, issue_no, issue_path = scraper.scrape_page(response, issue)
-                    pdf_links = soup.find_all("a", href=lambda x: x and "file_download.php" in x)
-                    scraper.download_pdf_files(issue_path, pdf_links)
+                    file_links = soup.find_all("a", href=lambda x: x and "file_download.php" in x)
+                    scraper.download_multiple_type_files(issue_path, file_links)
     except Exception as e:
         logger.error(f"Script failed: {e}")
         raise
