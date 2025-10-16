@@ -103,14 +103,18 @@ class MantisScraper:
         try:
             soup = BeautifulSoup(response.text, "html.parser")
             issue_no = soup.title.text.split(':')[0]
-            issue_path = DOWNLOADS_DIR / issue_no
-            issue_path.mkdir(parents=True, exist_ok=True)
+            
+            _category_no = "".join(soup.find("td", class_="bug-category").text.split())
+            category_no = re.sub(r'[<>:"/\\|?*]', '_', f"{_category_no}_({issue_no})")
+
+            downlaod_path = DOWNLOADS_DIR / category_no
+            downlaod_path.mkdir(parents=True, exist_ok=True)
 
             # Save HTML report
-            with (issue_path / f"{issue_no}_report.html").open("w", encoding="utf-8") as f:
+            with (downlaod_path / f"{issue_no}_report.html").open("w", encoding="utf-8") as f:
                 f.write(soup.prettify())
             logger.info(f"Saved HTML report for issue {issue_no}")
-            return soup, issue_no, issue_path
+            return soup, issue_no, downlaod_path
         except Exception as e:
             logger.error(f"Error scraping issue {issue}: {e}")
             raise
@@ -132,14 +136,13 @@ class MantisScraper:
             logger.error(e)
             raise
 
-    def download_multiple_type_files(self, issue_path: Path, file_links: Set[BeautifulSoup]) -> None:
+    def download_multiple_type_files(self, download_path: Path, file_links: Set[BeautifulSoup]) -> None:
         """Download files from provided links."""
         if not file_links:
             logger.warning("No file links found.")
             return
 
         logger.info(f"Found {len(file_links)} file links.")
-        downloaded_files = set()
 
         for index, link in enumerate(file_links, 1):
             try:
@@ -153,7 +156,7 @@ class MantisScraper:
                     # input:    My new:file/name.pdf
                     # output:   My_new_file_name.pdf
                 filename = re.sub(r'[^\w\.-]', '_', f"{index}_{file_basename.strip()}.{file_extension}" or f"{index}_file.{file_extension}")
-                file_path = issue_path / filename
+                file_path = download_path / filename
 
                 logger.info(f"Downloading {filename} from {file_url}")
                 response = self.session.get(file_url, timeout=10, allow_redirects=True)
@@ -186,10 +189,10 @@ def main():
             for issue in issues:
                 response = scraper.access_issue_page(issue)
                 if response:
-                    soup, issue_no, issue_path = scraper.scrape_page(response, issue)
+                    soup, issue_no, download_path = scraper.scrape_page(response, issue)
                     file_links = soup.find_all("a", href=lambda x: x and "file_download.php" in x)
                     unique_links = scraper.get_unique_links(file_links)
-                    scraper.download_multiple_type_files(issue_path, unique_links)
+                    scraper.download_multiple_type_files(download_path, unique_links)
     except Exception as e:
         logger.error(f"Script failed: {e}")
         raise
