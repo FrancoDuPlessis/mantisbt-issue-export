@@ -1,12 +1,54 @@
+# Standard library imports
+import getpass
 import logging
+import os
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple, Set
-import getpass
+from typing import List, Optional, Set, Tuple
+
+# Related third-party imports
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-import os
+from docx import Document
+from docx.enum.table import WD_ROW_HEIGHT_RULE
+from docx.shared import Cm, Pt
+
+
+# Every key contains the row no, column no and (later) text to be added to the report table cell
+doc_data = {
+    "id": [1, 0],
+    "project":[1, 1],
+    "category":[1, 2],
+    "view-status":[1, 3],
+    "date-submitted":[1, 4],
+    "last-modified":[1, 5],
+    "reporter":[3, 1],
+    "assigned-to":[3, 3],
+    "priority":[4, 1],
+    "severity":[4, 3],
+    "reproducibility":[4, 5],
+    "status":[5, 1],
+    "resolution":[5, 3],
+    "summary":[7, 1],
+    "description":[8, 1],
+    "steps-to-reproduce":[9, 1],
+    "custom-field":{
+        0: [11, 1],
+        1: [12, 1],
+        2: [13, 1],
+        3: [14, 1],
+        4: [15, 1],
+        5: [16, 1],
+        6: [17, 1],
+        7: [18, 1],
+        8: [19, 1],
+        9: [20, 1],
+        10: [21, 1],
+        11: [22, 1],
+    },
+}
+
 
 # Configure logging
 logging.basicConfig(
@@ -119,6 +161,46 @@ class MantisScraper:
             logger.error(f"Error scraping issue {issue}: {e}")
             raise
     
+    def get_report_data(self, soup: BeautifulSoup) -> None:
+        
+        for key in doc_data.keys():
+            if key == "custom-field":
+                custom_tags = soup.find_all(lambda tag: tag.name == 'td' and tag.get('class') == ['bug-custom-field'])
+                for index, tag in enumerate(custom_tags):
+                    tag_text = tag.text.strip()
+                    doc_data[key][index].append(tag_text)
+            else:
+                tag = soup.find_all(lambda tag: tag.has_attr("class") and tag["class"] == [f"bug-{key}"])[-1]
+                tag_text = tag.text.strip()
+                doc_data[key].append(tag_text)
+
+    def populate_report(self, data:dict, download_path: Path):
+        document = Document('hrc_report_template.docx')
+
+        style = document.styles['Normal']
+        font = style.font
+        font.name = "Aptos (Body)"
+        font.size = Pt(8)
+
+        _table = (document.tables)[0]
+
+        for key in doc_data.keys():
+            if key == "custom-field":
+                for index, value in enumerate(key):
+                   _table.cell(doc_data[key][index][0], doc_data[key][index][1]).text = doc_data[key][index][2]
+            else:
+                _table.cell(doc_data[key][0], doc_data[key][1]).text = doc_data[key][2]
+        
+        # Style table row height
+        for index, row in enumerate(_table.rows):
+            if index <= 7 or index >= 10:
+                row.height = Cm(0.5)
+                row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
+        
+        document_file_name = f"{doc_data["category"][2]}-{doc_data["custom-field"][11][2]}.docx"
+        # document.save(f"{doc_data["category"][2]}-{doc_data["custom-field"][11][2]}.docx")
+        document.save(os.path.join(download_path, document_file_name))
+    
     def get_unique_links(self, file_links: List[BeautifulSoup]) -> Set[BeautifulSoup]:
         """Ensure downloadable file links are unique with no duplicates
 
@@ -171,14 +253,9 @@ class MantisScraper:
 def main():
     """Main function to orchestrate the scraping process."""
     try:
-        # === Use in dev enironment only ===
-        username = "Francoisdl"
-        password = "gTf{<=$DT9cJ7FgS"
-        # === Use in dev enironment only ===
-
-        # # Prompt for credentials
-        # username = input("Enter your Mantis username: ")
-        # password = getpass.getpass(prompt=f"Enter password for {username}: ")
+        # Prompt for credentials
+        username = input("Enter your Mantis username: ")
+        password = getpass.getpass(prompt=f"Enter password for {username}: ")
 
         # Ensure downloads directory exists
         DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -190,6 +267,8 @@ def main():
                 response = scraper.access_issue_page(issue)
                 if response:
                     soup, issue_no, download_path = scraper.scrape_page(response, issue)
+                    scraper.get_report_data(soup)
+                    scraper.populate_report(doc_data, download_path)
                     file_links = soup.find_all("a", href=lambda x: x and "file_download.php" in x)
                     unique_links = scraper.get_unique_links(file_links)
                     scraper.download_multiple_type_files(download_path, unique_links)
