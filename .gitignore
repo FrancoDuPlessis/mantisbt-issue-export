@@ -9,8 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
-# Downloads folder
+# Project folders
 /downloads
+
+# Project files
+.env
 
 # Visual Studio Code
 .vscode/
