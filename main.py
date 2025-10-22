@@ -3,6 +3,7 @@ import getpass
 import logging
 import os
 import re
+import tomllib
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
@@ -69,7 +70,7 @@ PASSWORD_URL = os.getenv("PASSWORD_URL") or logger.error("PASSWORD_URL not set i
 APP_USERNAME = os.getenv("APP_USERNAME") or logger.error("APP_USERNAME not set in .env file") or exit(1)
 APP_PASSWORD = os.getenv("APP_PASSWORD") or logger.error("APP_PASSWORD not set in .env file") or exit(1)
 DOWNLOADS_DIR = Path("downloads")
-ISSUE_FILE = Path("issue_list.txt")
+ISSUE_FILE = Path("issue_list.toml")
 
 
 class MantisScraper:
@@ -98,8 +99,9 @@ class MantisScraper:
         try:
             if not file_path.is_file():
                 raise FileNotFoundError(f"Issue list file {file_path} does not exist.")
-            with file_path.open("r") as f:
-                issues = [issue.strip() for issue in f.readlines() if issue.strip()]
+            with file_path.open("rb") as f:
+                data = tomllib.load(f)
+                issues = data["active_issues"]
             logger.info(f"Loaded {len(issues)} issues from {file_path}\n")
             return issues
         except Exception as e:
