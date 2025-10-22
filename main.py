@@ -60,11 +60,14 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
+ENV = os.getenv("APP_ENV", "production")
 
 # Constants
 BASE_URL = os.getenv("BASE_URL") or logger.error("BASE_URL not set in .env file") or exit(1)
 USERNAME_URL = os.getenv("USERNAME_URL") or logger.error("USERNAME_URL not set in .env file") or exit(1)
 PASSWORD_URL = os.getenv("PASSWORD_URL") or logger.error("PASSWORD_URL not set in .env file") or exit(1)
+APP_USERNAME = os.getenv("APP_USERNAME") or logger.error("APP_USERNAME not set in .env file") or exit(1)
+APP_PASSWORD = os.getenv("APP_PASSWORD") or logger.error("APP_PASSWORD not set in .env file") or exit(1)
 DOWNLOADS_DIR = Path("downloads")
 ISSUE_FILE = Path("issue_list.txt")
 
@@ -253,9 +256,16 @@ class MantisScraper:
 def main():
     """Main function to orchestrate the scraping process."""
     try:
-        # Prompt for credentials
-        username = input("Enter your Mantis username: ")
-        password = getpass.getpass(prompt=f"Enter password for {username}: ")
+        if ENV == "debug":
+            # === Use in dev enironment only ===
+            username = APP_USERNAME
+            password = APP_PASSWORD
+            # === Use in dev enironment only ===
+
+        elif ENV == "production":
+            # Prompt for credentials
+            username = input("Enter your Mantis username: ")
+            password = getpass.getpass(prompt=f"Enter password for {username}: ")
 
         # Ensure downloads directory exists
         DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
