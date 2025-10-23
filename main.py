@@ -14,7 +14,10 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from docx import Document
 from docx.enum.table import WD_ROW_HEIGHT_RULE
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 from docx.shared import Cm, Pt
+from docx.text.paragraph import Paragraph
 
 
 # Every key contains the row no, column no and (later) text to be added to the report table cell
@@ -94,6 +97,41 @@ class MantisScraper:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.session.close()
         logger.info("Session closed.\n")
+    
+    def add_hyperlink(self, paragraph: Paragraph, url: str, text: str):
+        """Add a hyperlink to a paragraph in a Word document.
+
+        Args:
+            paragraph (Paragraph): The paragraph to add the hyperlink to (e.g., in a table cell or document body).
+            url (str): The URL for the hyperlink.
+            text (str): The display text for the hyperlink.
+        """
+        # Add a relationship for the hyperlink
+        part = paragraph.part
+        r_id = part.relate_to(url, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', is_external=True)
+
+        # Create the w:hyperlink tag
+        hyperlink = OxmlElement('w:hyperlink')
+        hyperlink.set(qn('r:id'), r_id)
+
+        # Create a run element for the hyperlink text
+        run = OxmlElement('w:r')
+        rPr = OxmlElement('w:rPr')
+
+        # Add hyperlink style (blue, underlined)
+        rStyle = OxmlElement('w:rStyle')
+        rStyle.set(qn('w:val'), 'Hyperlink')
+        rPr.append(rStyle)
+
+        # Add the text to the run
+        t = OxmlElement('w:t')
+        t.text = text
+        run.append(rPr)
+        run.append(t)
+        hyperlink.append(run)
+
+        # Add the hyperlink to the paragraph
+        paragraph._element.append(hyperlink)
 
     def get_issue_list(self, file_path: Path) -> List[str]:
         """Read issue numbers from a file."""
@@ -141,7 +179,7 @@ class MantisScraper:
                 return None
             print("")
             logger.info(f"Successfully accessed issue page {issue}")
-            return response
+            return response, issue_url
         except requests.RequestException as e:
             logger.error(f"Error accessing issue {issue}: {e}\n")
             return None
@@ -155,14 +193,14 @@ class MantisScraper:
             _category_no = "".join(soup.find("td", class_="bug-category").text.split())
             category_no = re.sub(r'[<>:"/\\|?*]', '_', f"{_category_no}_({issue_no})")
 
-            downlaod_path = DOWNLOADS_DIR / category_no
-            downlaod_path.mkdir(parents=True, exist_ok=True)
+            download_path = DOWNLOADS_DIR / category_no
+            download_path.mkdir(parents=True, exist_ok=True)
 
             # Save HTML report
-            with (downlaod_path / f"{issue_no}_report.html").open("w", encoding="utf-8") as f:
+            with (download_path / f"{issue_no}_report.html").open("w", encoding="utf-8") as f:
                 f.write(soup.prettify())
             logger.info(f"Saved HTML report for issue {issue_no}")
-            return soup, downlaod_path
+            return soup, download_path
         except Exception as e:
             logger.error(f"Error scraping issue {issue}: {e}")
             raise
@@ -180,7 +218,7 @@ class MantisScraper:
                 tag_text = tag.text.strip()
                 issue_data[key].append(tag_text)
 
-    def populate_report(self, issue_data:dict, download_path: Path):
+    def populate_report(self, issue_data:dict, download_path: Path, issue_url: str):
         document = Document('hrc_report_template.docx')
 
         style = document.styles['Normal']
@@ -191,7 +229,13 @@ class MantisScraper:
         _table = (document.tables)[0]
 
         for key in issue_data.keys():
-            if key == "custom-field":
+            if key == "id":
+                # Add id cell data with hyperlink
+                id_cell = _table.cell(issue_data["id"][0], issue_data["id"][1])
+                id_cell_text = issue_data["id"][2]
+                id_cell_paragraph = id_cell.paragraphs[0]
+                self.add_hyperlink(id_cell_paragraph, issue_url, id_cell_text)
+            elif key == "custom-field":
                 for index, value in enumerate(key):
                    _table.cell(issue_data[key][index][0], issue_data[key][index][1]).text = issue_data[key][index][2]
             else:
@@ -276,14 +320,14 @@ def main():
             scraper.login()
             issues = scraper.get_issue_list(ISSUE_FILE)
             for issue in issues:
-                response = scraper.access_issue_page(issue)
+                response, issue_url = scraper.access_issue_page(issue)
                 if response:
                     # Make a fresh copy of the original dict for this iteration
                     issue_data = copy.deepcopy(original_data)
 
                     soup, download_path = scraper.scrape_page(response, issue)
                     scraper.get_report_data(issue_data, soup)
-                    scraper.populate_report(issue_data, download_path)
+                    scraper.populate_report(issue_data, download_path, issue_url)
                     file_links = soup.find_all("a", href=lambda x: x and "file_download.php" in x)
                     unique_links = scraper.get_unique_links(file_links)
                     scraper.download_multiple_type_files(download_path, unique_links)
