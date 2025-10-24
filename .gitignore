@@ -10,7 +10,7 @@ wheels/
 .venv
 
 # Project folders
-/downloads
+/reports
 
 # Project files
 .env

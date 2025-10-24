@@ -74,7 +74,8 @@ USERNAME_URL = os.getenv("USERNAME_URL") or logger.error("USERNAME_URL not set i
 PASSWORD_URL = os.getenv("PASSWORD_URL") or logger.error("PASSWORD_URL not set in .env file") or exit(1)
 APP_USERNAME = os.getenv("APP_USERNAME") or logger.error("APP_USERNAME not set in .env file") or exit(1)
 APP_PASSWORD = os.getenv("APP_PASSWORD") or logger.error("APP_PASSWORD not set in .env file") or exit(1)
-DOWNLOADS_DIR = Path("downloads")
+REPORT_DIR = Path("reports")
+ATTACHEMENT_DIR = Path("attachements")
 ISSUE_FILE = Path("issue_list.toml")
 
 
@@ -194,14 +195,16 @@ class MantisScraper:
             _category_no = "".join(soup.find("td", class_="bug-category").text.split())
             category_no = re.sub(r'[<>:"/\\|?*]', '_', f"{_category_no}_({issue_no})")
 
-            download_path = DOWNLOADS_DIR / category_no
-            download_path.mkdir(parents=True, exist_ok=True)
+            REPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+            report_path = REPORT_DIR / category_no
+            report_path.mkdir(parents=True, exist_ok=True)
 
             # Save HTML report
-            with (download_path / f"{issue_no}_report.html").open("w", encoding="utf-8") as f:
+            with (report_path / f"{issue_no}_report.html").open("w", encoding="utf-8") as f:
                 f.write(soup.prettify())
             logger.info(f"Saved HTML report for issue {issue_no}")
-            return soup, download_path
+            return soup, report_path
         except Exception as e:
             logger.error(f"Error scraping issue {issue}: {e}")
             raise
@@ -219,7 +222,7 @@ class MantisScraper:
                 tag_text = tag.text.strip()
                 issue_data[key].append(tag_text)
 
-    def populate_report(self, issue_data:dict, download_path: Path, issue_url: str):
+    def populate_report(self, issue_data:dict, report_path: Path, issue_url: str):
         document = Document('hrc_report_template.docx')
 
         style = document.styles['Normal']
@@ -248,11 +251,16 @@ class MantisScraper:
                 row.height = Cm(0.5)
                 row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
         
+        for root, dirs, files in os.walk(report_path / ATTACHEMENT_DIR):
+            for filename in files:
+                _par = document.add_paragraph()
+                self.add_hyperlink(_par, f"{ATTACHEMENT_DIR}/{filename}", filename)
+        
         document_file_name = f"{issue_data["category"][2]}-{issue_data["custom-field"][11][2]}.docx"
-        document.save(os.path.join(download_path, document_file_name))
+        document.save(os.path.join(report_path, document_file_name))
 
         # Save to PDF
-        convert(os.path.join(download_path, document_file_name))
+        convert(os.path.join(report_path, document_file_name))
     
     def get_unique_links(self, file_links: List[BeautifulSoup]) -> Set[BeautifulSoup]:
         """Ensure downloadable file links are unique with no duplicates
@@ -271,7 +279,7 @@ class MantisScraper:
             logger.error(e)
             raise
 
-    def download_multiple_type_files(self, download_path: Path, file_links: Set[BeautifulSoup]) -> None:
+    def download_multiple_type_files(self, report_path: Path, file_links: Set[BeautifulSoup]) -> None:
         """Download files from provided links."""
         if not file_links:
             logger.warning("No file links found.")
@@ -291,7 +299,8 @@ class MantisScraper:
                     # input:    My new:file/name.pdf
                     # output:   My_new_file_name.pdf
                 filename = re.sub(r'[^\w\.-]', '_', f"{index}_{file_basename.strip()}.{file_extension}" or f"{index}_file.{file_extension}")
-                file_path = download_path / filename
+                (report_path / ATTACHEMENT_DIR).mkdir(parents=True, exist_ok=True)
+                file_path = report_path / ATTACHEMENT_DIR / filename
 
                 logger.info(f"Downloading {filename} from {file_url}")
                 response = self.session.get(file_url, timeout=10, allow_redirects=True)
@@ -318,7 +327,7 @@ def main():
             password = getpass.getpass(prompt=f"Enter password for {username}: ")
 
         # Ensure downloads directory exists
-        DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+        REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
         with MantisScraper(BASE_URL, USERNAME_URL, PASSWORD_URL, username, password) as scraper:
             scraper.login()
@@ -329,12 +338,14 @@ def main():
                     # Make a fresh copy of the original dict for this iteration
                     issue_data = copy.deepcopy(original_data)
 
-                    soup, download_path = scraper.scrape_page(response, issue)
-                    scraper.get_report_data(issue_data, soup)
-                    scraper.populate_report(issue_data, download_path, issue_url)
+                    soup, report_path = scraper.scrape_page(response, issue)
                     file_links = soup.find_all("a", href=lambda x: x and "file_download.php" in x)
+                    
                     unique_links = scraper.get_unique_links(file_links)
-                    scraper.download_multiple_type_files(download_path, unique_links)
+                    scraper.download_multiple_type_files(report_path, unique_links)
+
+                    scraper.get_report_data(issue_data, soup)
+                    scraper.populate_report(issue_data, report_path, issue_url)
     except Exception as e:
         logger.error(f"Script failed: {e}")
         raise
