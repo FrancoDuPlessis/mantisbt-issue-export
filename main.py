@@ -18,6 +18,7 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from docx.shared import Cm, Pt
 from docx.text.paragraph import Paragraph
+from docx2pdf import convert
 
 
 # Every key contains the row no, column no and (later) text to be added to the report table cell
@@ -249,6 +250,9 @@ class MantisScraper:
         
         document_file_name = f"{issue_data["category"][2]}-{issue_data["custom-field"][11][2]}.docx"
         document.save(os.path.join(download_path, document_file_name))
+
+        # Save to PDF
+        convert(os.path.join(download_path, document_file_name))
     
     def get_unique_links(self, file_links: List[BeautifulSoup]) -> Set[BeautifulSoup]:
         """Ensure downloadable file links are unique with no duplicates
