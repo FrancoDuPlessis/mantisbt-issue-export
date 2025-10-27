@@ -51,7 +51,7 @@ Example `.env`
 # .env
 
 # Optional: enables debug mode to use stored credentials instead of prompting
-APP_ENV="debug"
+# APP_ENV="debug"
 
 # Required: base URL of your MantisBT instance
 BASE_URL=[insert base url]

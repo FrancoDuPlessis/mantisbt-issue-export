@@ -72,8 +72,11 @@ ENV = os.getenv("APP_ENV", "production")
 BASE_URL = os.getenv("BASE_URL") or logger.error("BASE_URL not set in .env file") or exit(1)
 USERNAME_URL = os.getenv("USERNAME_URL") or logger.error("USERNAME_URL not set in .env file") or exit(1)
 PASSWORD_URL = os.getenv("PASSWORD_URL") or logger.error("PASSWORD_URL not set in .env file") or exit(1)
-APP_USERNAME = os.getenv("APP_USERNAME") or logger.error("APP_USERNAME not set in .env file") or exit(1)
-APP_PASSWORD = os.getenv("APP_PASSWORD") or logger.error("APP_PASSWORD not set in .env file") or exit(1)
+
+if ENV == "debug":
+    APP_USERNAME = os.getenv("APP_USERNAME") or logger.error("APP_USERNAME not set in .env file") or exit(1)
+    APP_PASSWORD = os.getenv("APP_PASSWORD") or logger.error("APP_PASSWORD not set in .env file") or exit(1)
+
 REPORT_DIR = Path("reports")
 ATTACHEMENT_DIR = Path("attachements")
 ISSUE_FILE = Path("issue_list.toml")
